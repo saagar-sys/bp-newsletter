@@ -70,8 +70,14 @@ async function callClaude(messages, systemPrompt) {
       messages,
     }),
   });
-  const data = await response.json();
-  if (data.error) throw new Error(data.error.message);
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Server error: " + text.slice(0, 200));
+  }
+  if (data.error) throw new Error(JSON.stringify(data.error));
   return data.content[0].text;
 }
 
