@@ -246,13 +246,16 @@ export default function App() {
     setChatError("");
     const userMsg = chatInput.trim();
     setChatInput("");
-    const newHistory = [...chatHistory, { role: "user", content: userMsg }];
+    const condensedHistory = [
+      { role: "user", content: "[rundown]\n" + csvText },
+      { role: "assistant", content: JSON.stringify(newsletter) },
+      { role: "user", content: userMsg }
+    ];
     try {
-      const raw = await callClaude(newHistory, CHAT_SYSTEM);
+      const raw = await callClaude(condensedHistory, CHAT_SYSTEM);
       const parsed = parseJSON(raw);
       setNewsletter(parsed);
-      setChatHistory([...newHistory, { role: "assistant", content: JSON.stringify(parsed) }]);
-    } catch (e) {
+setChatHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: JSON.stringify(parsed) }]);    } catch (e) {
       setChatError(e.message);
     }
     setChatLoading(false);
