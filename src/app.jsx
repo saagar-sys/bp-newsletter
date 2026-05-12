@@ -462,11 +462,15 @@ setChatHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "as
                 placeholder="e.g. A BLOCK - IRAN"
                 style={{ ...TA, height: "auto", padding: "10px 14px", fontSize: 13 }} />
             </div>
-            <div style={{ marginBottom: 18 }}>
-              <Lbl>TRANSCRIPT</Lbl>
-              <textarea value={transcriptText} onChange={e => setTranscriptText(e.target.value)}
-                placeholder="Paste the block transcript here..."
-                style={{ ...TA, height: 210 }} />
+           <div style={{ marginBottom: 18 }}>
+              <Lbl>TRANSCRIPT JSON</Lbl>
+              <div style={{ display: "flex", gap: 10 }}>
+                <Btn small onClick={() => transcriptFileRef.current.click()}>UPLOAD JSON</Btn>
+                <input ref={transcriptFileRef} type="file" accept=".json"
+                  onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setTranscriptText(ev.target.result); r.readAsText(f); }}
+                  style={{ display: "none" }} />
+                {transcriptText && <span style={{ fontSize: 11, color: "#22c55e", alignSelf: "center", fontFamily: "monospace" }}>FILE LOADED</span>}
+              </div>
             </div>
             <Btn gold onClick={handleExtractQuotes} disabled={extracting || !transcriptText.trim()}>
               {extracting ? "EXTRACTING..." : "EXTRACT QUOTES"}
