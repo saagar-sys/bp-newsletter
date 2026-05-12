@@ -60,7 +60,7 @@ function savePrompt(key, val) {
 }
 
 async function callClaude(messages, systemPrompt) {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -173,7 +173,7 @@ function SettingsPanel({ draftPrompt, setDraftPrompt, secondPassPrompt, setSecon
         ))}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <Btn small onClick={onClose}>CANCEL</Btn>
-          <Btn gold small onClick={handleSave}>{saved ? "SAVED ✓" : "SAVE CHANGES"}</Btn>
+          <Btn gold small onClick={handleSave}>{saved ? "SAVED" : "SAVE CHANGES"}</Btn>
         </div>
       </div>
     </div>
