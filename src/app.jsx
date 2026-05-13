@@ -11,7 +11,7 @@ CONTENT RULES:
 - When covering controversial topics, do not soften your language
 - Bullet points: one sentence each, hard facts only
 - Attribute all facts to the original outlet. Do not cite X/Twitter handles
-- The entire newsletter must not exceed 1,200 words. Shorten summary paragraphs first if cuts needed
+- The entire newsletter should be as close to 1,200 words as possible. Aim for 1,100-1,200 words. Do not produce short drafts. Every block should be fully developed with a complete summary paragraph and at least 3-4 bullets. Only cut words if you are over 1,200.
 - No em dashes anywhere in the copy
 - No filler phrases like "it's worth noting," "notably," or "it remains to be seen"
 - Write like a smart person explaining the news, not like a press release
@@ -33,7 +33,7 @@ Return JSON only. No preamble, no markdown fences. Structure:
 }`;
 
 const DEFAULT_SECOND_PASS_PROMPT = `You are a copy editor for Breaking Points newsletter. Review the draft and apply these checks:
-1. Total word count must not exceed 1,200 words. If over, shorten summary paragraphs first, trim bullets last.
+1. Total word count should be 1,100-1,200 words. If under 1,000 words, expand summary paragraphs and add bullets where the source material supports it. Only cut if over 1,200.
 2. Remove any em dashes. Replace with commas, colons, or rewrite.
 3. Remove filler phrases: "it's worth noting", "notably", "it remains to be seen", "importantly".
 4. Each bullet must contain at least one hard fact (number, name, date, quote, or specific outcome).
@@ -41,7 +41,7 @@ const DEFAULT_SECOND_PASS_PROMPT = `You are a copy editor for Breaking Points ne
 
 Return the improved newsletter as JSON in exactly the same format as the input. No preamble, no markdown fences.`;
 
-const DEFAULT_TRANSCRIPT_PROMPT = `You are the newsletter editor for Breaking Points. Given a transcript of a show segment, extract the 3-5 most newsletter-worthy quotes. Punchy, substantive, stand on their own. Return JSON only:
+const DEFAULT_TRANSCRIPT_PROMPT = `You are the newsletter editor for Breaking Points. Given a transcript JSON of a show segment, extract the 3-5 most newsletter-worthy quotes. Punchy, substantive, stand on their own. Return JSON only:
 {
   "block": "A BLOCK",
   "topic": "IRAN",
@@ -72,11 +72,7 @@ async function callClaude(messages, systemPrompt) {
   });
   const text = await response.text();
   let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error("Server error: " + text.slice(0, 200));
-  }
+  try { data = JSON.parse(text); } catch { throw new Error("Server error: " + text.slice(0, 200)); }
   if (data.error) throw new Error(JSON.stringify(data.error));
   return data.content[0].text;
 }
@@ -91,16 +87,110 @@ function countWords(nl) {
   return nl.blocks.map(b => b.summary + " " + b.bullets.join(" ")).join(" ").trim().split(/\s+/).length;
 }
 
-function buildPlainText(nl) {
+function buildPlainText(nl, blockQuotes) {
   const lines = ["BREAKING POINTS\nSHOW RUNDOWN NEWSLETTER\n" + nl.date];
   for (const block of nl.blocks) {
     lines.push("\n" + block.label);
     lines.push(block.topic);
     if (block.guest) lines.push("Guest: " + block.guest);
+    const quotes = blockQuotes[block.label];
+    if (quotes && quotes.length > 0) {
+      for (const q of quotes) lines.push("[" + q.timestamp + "] \"" + q.text + "\"");
+    }
     lines.push(block.summary);
     for (const bullet of block.bullets) lines.push("* " + bullet);
   }
   return lines.join("\n");
+}
+
+async function generateDocx(newsletter, blockQuotes) {
+  const { Document, Packer, Paragraph, TextRun, BorderStyle, AlignmentType } = await import("https://esm.sh/docx@8.5.0");
+
+  const children = [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: "BREAKING POINTS", font: "Arial", size: 18, color: "999999", allCaps: true })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: "SHOW RUNDOWN NEWSLETTER", font: "Arial", size: 18, color: "999999", allCaps: true })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: newsletter.date, font: "Arial", size: 20, color: "666666" })],
+      spacing: { after: 300 },
+    }),
+  ];
+
+  for (const block of newsletter.blocks) {
+    children.push(new Paragraph({
+      border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: "CCCCCC" } },
+      children: [],
+      spacing: { before: 200 },
+    }));
+    children.push(new Paragraph({
+      children: [new TextRun({ text: block.label, font: "Arial", size: 16, color: "999999", allCaps: true })],
+      spacing: { before: 200, after: 60 },
+    }));
+    children.push(new Paragraph({
+      children: [new TextRun({ text: block.topic, font: "Arial", size: 28, bold: true })],
+      spacing: { after: 120 },
+    }));
+    if (block.guest) {
+      children.push(new Paragraph({
+        children: [new TextRun({ text: "Guest: " + block.guest, font: "Arial", size: 20, italics: true, color: "888888" })],
+        spacing: { after: 120 },
+      }));
+    }
+
+    const quotes = blockQuotes[block.label];
+    if (quotes && quotes.length > 0) {
+      for (const q of quotes) {
+        children.push(new Paragraph({
+          children: [
+            new TextRun({ text: "[" + q.timestamp + "]  ", font: "Arial", size: 18, color: "999999" }),
+            new TextRun({ text: "\u201c" + q.text + "\u201d", font: "Arial", size: 20, italics: true, color: "444444" }),
+          ],
+          spacing: { after: 100 },
+          indent: { left: 400 },
+        }));
+      }
+      children.push(new Paragraph({ children: [], spacing: { after: 120 } }));
+    }
+
+    children.push(new Paragraph({
+      children: [new TextRun({ text: block.summary, font: "Arial", size: 20 })],
+      spacing: { after: 160 },
+    }));
+    for (const bullet of block.bullets) {
+      children.push(new Paragraph({
+        bullet: { level: 0 },
+        children: [new TextRun({ text: bullet, font: "Arial", size: 20 })],
+        spacing: { after: 80 },
+      }));
+    }
+    children.push(new Paragraph({ children: [], spacing: { after: 160 } }));
+  }
+
+  const doc = new Document({
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 12240, height: 15840 },
+          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+        },
+      },
+      children,
+    }],
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "BP_Newsletter_" + newsletter.date.replace(/\s/g, "_") + ".docx";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 const TA = {
@@ -145,7 +235,7 @@ function SettingsPanel({ draftPrompt, setDraftPrompt, secondPassPrompt, setSecon
   const sections = [
     { key: "draft", label: "DRAFT PROMPT", desc: "Generates the initial newsletter from your rundown.", def: DEFAULT_DRAFT_PROMPT },
     { key: "second", label: "SECOND PASS PROMPT", desc: "Runs after the draft to tighten copy. Can be toggled off on the main screen.", def: DEFAULT_SECOND_PASS_PROMPT },
-    { key: "transcript", label: "QUOTE EXTRACTION PROMPT", desc: "Extracts quotes from block transcripts.", def: DEFAULT_TRANSCRIPT_PROMPT },
+    { key: "transcript", label: "QUOTE EXTRACTION PROMPT", desc: "Extracts quotes from block transcript JSON files.", def: DEFAULT_TRANSCRIPT_PROMPT },
   ];
 
   return (
@@ -205,15 +295,12 @@ export default function App() {
   const [chatError, setChatError] = useState("");
   const [secondPassEnabled, setSecondPassEnabled] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [blockQuotes, setBlockQuotes] = useState({});
+  const [extractingBlock, setExtractingBlock] = useState(null);
   const fileInputRef = useRef();
+  const transcriptFileRefs = useRef({});
 
-  const [transcriptBlock, setTranscriptBlock] = useState("");
-  const [transcriptText, setTranscriptText] = useState("");
-  const [extracting, setExtracting] = useState(false);
-  const [quotes, setQuotes] = useState(null);
-  const [transcriptError, setTranscriptError] = useState("");
-
-  const wordCount = countWords(newsletter);
+  const wordCount = newsletter ? newsletter.blocks.map(b => b.summary + " " + b.bullets.join(" ")).join(" ").trim().split(/\s+/).length : 0;
   const warnColor = wordCount > 1200 ? "#ef4444" : wordCount > 1050 ? "#f59e0b" : "#22c55e";
 
   async function handleGenerateDraft() {
@@ -222,6 +309,7 @@ export default function App() {
     setDraftError("");
     setNewsletter(null);
     setChatHistory([]);
+    setBlockQuotes({});
     try {
       const raw = await callClaude([{ role: "user", content: "Here is the show rundown:\n\n" + csvText }], draftPrompt);
       let parsed = parseJSON(raw);
@@ -261,25 +349,32 @@ export default function App() {
       const raw = await callClaude(condensedHistory, CHAT_SYSTEM);
       const parsed = parseJSON(raw);
       setNewsletter(parsed);
-setChatHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: JSON.stringify(parsed) }]);    } catch (e) {
+      setChatHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "assistant", content: JSON.stringify(parsed) }]);
+    } catch (e) {
       setChatError(e.message);
     }
     setChatLoading(false);
   }
 
-  async function handleExtractQuotes() {
-    if (!transcriptText.trim()) return;
-    setExtracting(true);
-    setTranscriptError("");
-    setQuotes(null);
+  async function handleTranscriptUpload(blockLabel, file) {
+    if (!file) return;
+    setExtractingBlock(blockLabel);
+    const text = await file.text();
     try {
-      const prompt = transcriptBlock ? "Block: " + transcriptBlock + "\n\nTranscript:\n" + transcriptText : "Transcript:\n" + transcriptText;
-      const raw = await callClaude([{ role: "user", content: prompt }], transcriptPrompt);
-      setQuotes(parseJSON(raw));
+      const raw = await callClaude([{ role: "user", content: "Block: " + blockLabel + "\n\nTranscript JSON:\n" + text }], transcriptPrompt);
+      const parsed = parseJSON(raw);
+      setBlockQuotes(prev => ({ ...prev, [blockLabel]: parsed.quotes }));
     } catch (e) {
-      setTranscriptError(e.message);
+      alert("Error extracting quotes: " + e.message);
     }
-    setExtracting(false);
+    setExtractingBlock(null);
+  }
+
+  function removeQuote(blockLabel, idx) {
+    setBlockQuotes(prev => ({
+      ...prev,
+      [blockLabel]: prev[blockLabel].filter((_, i) => i !== idx)
+    }));
   }
 
   function updateBlock(idx, field, value) {
@@ -314,189 +409,154 @@ setChatHistory(prev => [...prev, { role: "user", content: userMsg }, { role: "as
         <Btn small onClick={() => setShowSettings(true)}>PROMPTS</Btn>
       </div>
 
-      <div style={{ display: "flex", borderBottom: "1px solid #161616", padding: "0 40px" }}>
-        {["Draft Newsletter", "Extract Quotes"].map((tab, i) => (
-          <button key={i} onClick={() => setActiveTab(i)} style={{
-            background: "none", border: "none",
-            borderBottom: activeTab === i ? "2px solid #c8a96e" : "2px solid transparent",
-            color: activeTab === i ? "#c8a96e" : "#444",
-            padding: "12px 16px 10px", fontSize: 12, fontFamily: "monospace",
-            letterSpacing: 1, cursor: "pointer", marginBottom: -1,
-          }}>{tab}</button>
-        ))}
-      </div>
-
       <div style={{ padding: "32px 40px", maxWidth: 840, margin: "0 auto" }}>
+        <div style={{ marginBottom: 18 }}>
+          <Lbl>RUNDOWN INPUT</Lbl>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+            <Btn small onClick={() => fileInputRef.current.click()}>UPLOAD CSV</Btn>
+            <input ref={fileInputRef} type="file" accept=".csv,.txt"
+              onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setCsvText(ev.target.result); r.readAsText(f); }}
+              style={{ display: "none" }} />
+            <span style={{ fontSize: 11, color: "#3a3a3a", alignSelf: "center", fontFamily: "monospace" }}>or paste below</span>
+          </div>
+          <textarea value={csvText} onChange={e => setCsvText(e.target.value)}
+            placeholder="Paste your CSV rundown here..."
+            style={{ ...TA, height: 130 }} />
+        </div>
 
-        {activeTab === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}>
+          <Btn gold onClick={handleGenerateDraft} disabled={drafting || runningSecondPass || !csvText.trim()}>
+            {statusMsg || "GENERATE DRAFT"}
+          </Btn>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 10, fontFamily: "monospace", color: "#444", letterSpacing: 1.5 }}>
+            <input type="checkbox" checked={secondPassEnabled} onChange={e => setSecondPassEnabled(e.target.checked)} style={{ accentColor: "#c8a96e" }} />
+            SECOND PASS
+          </label>
+        </div>
+
+        {draftError && <div style={{ marginBottom: 14, color: "#ef4444", fontSize: 11, fontFamily: "monospace" }}>Error: {draftError}</div>}
+
+        {newsletter && (
           <div>
-            <div style={{ marginBottom: 18 }}>
-              <Lbl>RUNDOWN INPUT</Lbl>
-              <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                <Btn small onClick={() => fileInputRef.current.click()}>UPLOAD CSV</Btn>
-                <input ref={fileInputRef} type="file" accept=".csv,.txt"
-                  onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setCsvText(ev.target.result); r.readAsText(f); }}
-                  style={{ display: "none" }} />
-                <span style={{ fontSize: 11, color: "#3a3a3a", alignSelf: "center", fontFamily: "monospace" }}>or paste below</span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, padding: "9px 13px", background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 2 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 9, fontFamily: "monospace", color: "#444", letterSpacing: 2 }}>WORDS</span>
+                <span style={{ fontSize: 13, fontFamily: "monospace", color: warnColor, fontWeight: 700 }}>{wordCount} / 1200</span>
               </div>
-              <textarea value={csvText} onChange={e => setCsvText(e.target.value)}
-                placeholder="Paste your CSV rundown here..."
-                style={{ ...TA, height: 130 }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn small onClick={() => { navigator.clipboard.writeText(buildPlainText(newsletter, blockQuotes)); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+                  {copied ? "COPIED" : "COPY ALL"}
+                </Btn>
+                <Btn small gold onClick={() => generateDocx(newsletter, blockQuotes)}>DOWNLOAD DOCX</Btn>
+              </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}>
-              <Btn gold onClick={handleGenerateDraft} disabled={drafting || runningSecondPass || !csvText.trim()}>
-                {statusMsg || "GENERATE DRAFT"}
-              </Btn>
-              <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 10, fontFamily: "monospace", color: "#444", letterSpacing: 1.5 }}>
-                <input type="checkbox" checked={secondPassEnabled} onChange={e => setSecondPassEnabled(e.target.checked)} style={{ accentColor: "#c8a96e" }} />
-                SECOND PASS
-              </label>
-            </div>
+            <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 22, marginBottom: 28 }}>
+              <div style={{ textAlign: "center", marginBottom: 24, paddingBottom: 18, borderBottom: "1px solid #161616" }}>
+                <div style={{ fontSize: 9, letterSpacing: 5, color: "#444", fontFamily: "monospace" }}>BREAKING POINTS</div>
+                <div style={{ fontSize: 10, letterSpacing: 2, color: "#3a3a3a", fontFamily: "monospace", marginTop: 3 }}>SHOW RUNDOWN NEWSLETTER</div>
+                <div style={{ fontSize: 12, color: "#666", marginTop: 5, fontFamily: "monospace" }}>{newsletter.date}</div>
+              </div>
 
-            {draftError && <div style={{ marginBottom: 14, color: "#ef4444", fontSize: 11, fontFamily: "monospace" }}>Error: {draftError}</div>}
-
-            {newsletter && (
-              <div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, padding: "9px 13px", background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 2 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 9, fontFamily: "monospace", color: "#444", letterSpacing: 2 }}>WORDS</span>
-                    <span style={{ fontSize: 13, fontFamily: "monospace", color: warnColor, fontWeight: 700 }}>{wordCount} / 1200</span>
-                  </div>
-                  <Btn small onClick={() => { navigator.clipboard.writeText(buildPlainText(newsletter)); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
-                    {copied ? "COPIED" : "COPY ALL"}
-                  </Btn>
-                </div>
-
-                <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 22, marginBottom: 28 }}>
-                  <div style={{ textAlign: "center", marginBottom: 24, paddingBottom: 18, borderBottom: "1px solid #161616" }}>
-                    <div style={{ fontSize: 9, letterSpacing: 5, color: "#444", fontFamily: "monospace" }}>BREAKING POINTS</div>
-                    <div style={{ fontSize: 10, letterSpacing: 2, color: "#3a3a3a", fontFamily: "monospace", marginTop: 3 }}>SHOW RUNDOWN NEWSLETTER</div>
-                    <div style={{ fontSize: 12, color: "#666", marginTop: 5, fontFamily: "monospace" }}>{newsletter.date}</div>
-                  </div>
-
-                  {newsletter.blocks.map((block, i) => (
-                    <div key={i} style={{ marginBottom: 28, paddingBottom: 28, borderBottom: i < newsletter.blocks.length - 1 ? "1px solid #131313" : "none" }}>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
-                        <span style={{ fontSize: 9, letterSpacing: 3, color: "#444", fontFamily: "monospace" }}>{block.label}</span>
-                        <button onClick={() => setEditingBlock(editingBlock === i ? null : i)}
-                          style={{ background: "none", border: "none", color: "#3a3a3a", fontSize: 10, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>
-                          {editingBlock === i ? "DONE" : "EDIT"}
-                        </button>
-                      </div>
-
-                      {editingBlock === i
-                        ? <input value={block.topic} onChange={e => updateBlock(i, "topic", e.target.value)}
-                            style={{ background: "#111", border: "1px solid #2a2a2a", color: "#e8e4dc", fontSize: 17, fontWeight: 700, padding: "4px 8px", width: "100%", fontFamily: "Georgia, serif", borderRadius: 2, marginBottom: 8, boxSizing: "border-box" }} />
-                        : <h2 style={{ margin: "0 0 5px", fontSize: 18, fontWeight: 700, color: "#e8e4dc" }}>{block.topic}</h2>
-                      }
-
-                      {block.guest && <div style={{ color: "#666", fontStyle: "italic", fontSize: 12, marginBottom: 9 }}>Guest: {block.guest}</div>}
-
-                      {editingBlock === i
-                        ? <textarea value={block.summary} onChange={e => updateBlock(i, "summary", e.target.value)} rows={4}
-                            style={{ ...TA, fontSize: 13, marginBottom: 10 }} />
-                        : <p style={{ margin: "0 0 10px", fontSize: 13, lineHeight: 1.8, color: "#999" }}>{block.summary}</p>
-                      }
-
-                      <ul style={{ margin: 0, padding: "0 0 0 16px" }}>
-                        {block.bullets.map((bullet, j) => (
-                          <li key={j} style={{ marginBottom: 7, fontSize: 12, lineHeight: 1.7, color: "#777" }}>
-                            {editingBlock === i
-                              ? <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                                  <textarea value={bullet} onChange={e => updateBullet(i, j, e.target.value)} rows={2}
-                                    style={{ ...TA, flex: 1, fontSize: 12 }} />
-                                  <button onClick={() => removeBullet(i, j)}
-                                    style={{ background: "none", border: "none", color: "#3a3a3a", cursor: "pointer", fontSize: 16, padding: "3px 4px" }}>x</button>
-                                </div>
-                              : bullet
-                            }
-                          </li>
-                        ))}
-                      </ul>
+              {newsletter.blocks.map((block, i) => (
+                <div key={i} style={{ marginBottom: 28, paddingBottom: 28, borderBottom: i < newsletter.blocks.length - 1 ? "1px solid #131313" : "none" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 5 }}>
+                    <span style={{ fontSize: 9, letterSpacing: 3, color: "#444", fontFamily: "monospace" }}>{block.label}</span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {extractingBlock === block.label && <span style={{ fontSize: 9, color: "#c8a96e", fontFamily: "monospace" }}>EXTRACTING...</span>}
+                      <label style={{ fontSize: 9, color: "#555", fontFamily: "monospace", letterSpacing: 1, cursor: "pointer", border: "1px solid #252525", padding: "3px 8px", borderRadius: 2 }}>
+                        + QUOTES
+                        <input type="file" accept=".json"
+                          onChange={e => { const f = e.target.files[0]; if (f) handleTranscriptUpload(block.label, f); e.target.value = ""; }}
+                          style={{ display: "none" }} />
+                      </label>
+                      <button onClick={() => setEditingBlock(editingBlock === i ? null : i)}
+                        style={{ background: "none", border: "none", color: "#3a3a3a", fontSize: 10, fontFamily: "monospace", cursor: "pointer", letterSpacing: 1 }}>
+                        {editingBlock === i ? "DONE" : "EDIT"}
+                      </button>
                     </div>
-                  ))}
-                </div>
+                  </div>
 
-                <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 22 }}>
-                  <Lbl>REFINE WITH INSTRUCTIONS</Lbl>
-                  <p style={{ margin: "0 0 12px", fontSize: 11, color: "#3a3a3a", fontFamily: "monospace", lineHeight: 1.65 }}>
-                    e.g. "make the Iran block shorter" / "cut to hit word count" / "lead every bullet with the news, not the outlet name"
-                  </p>
+                  {editingBlock === i
+                    ? <input value={block.topic} onChange={e => updateBlock(i, "topic", e.target.value)}
+                        style={{ background: "#111", border: "1px solid #2a2a2a", color: "#e8e4dc", fontSize: 17, fontWeight: 700, padding: "4px 8px", width: "100%", fontFamily: "Georgia, serif", borderRadius: 2, marginBottom: 8, boxSizing: "border-box" }} />
+                    : <h2 style={{ margin: "0 0 5px", fontSize: 18, fontWeight: 700, color: "#e8e4dc" }}>{block.topic}</h2>
+                  }
 
-                  {chatTurns.length > 0 && (
-                    <div style={{ marginBottom: 10, maxHeight: 150, overflowY: "auto", padding: "10px 12px", background: "#0d0d0d", border: "1px solid #161616", borderRadius: 2 }}>
-                      {chatTurns.map((msg, i) => (
-                        <div key={i} style={{ marginBottom: 6 }}>
-                          <span style={{ fontSize: 9, color: "#c8a96e", fontFamily: "monospace", letterSpacing: 1 }}>YOU  </span>
-                          <span style={{ fontSize: 11, color: "#666" }}>{msg.content}</span>
+                  {block.guest && <div style={{ color: "#666", fontStyle: "italic", fontSize: 12, marginBottom: 9 }}>Guest: {block.guest}</div>}
+
+                  {blockQuotes[block.label] && blockQuotes[block.label].length > 0 && (
+                    <div style={{ margin: "10px 0 14px", padding: "10px 14px", background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 2 }}>
+                      <div style={{ fontSize: 9, letterSpacing: 2, color: "#555", fontFamily: "monospace", marginBottom: 8 }}>QUOTES</div>
+                      {blockQuotes[block.label].map((q, qi) => (
+                        <div key={qi} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                          <div>
+                            <span style={{ fontSize: 9, color: "#c8a96e", fontFamily: "monospace" }}>[{q.timestamp}] </span>
+                            <span style={{ fontSize: 12, color: "#999", fontStyle: "italic" }}>"{q.text}"</span>
+                          </div>
+                          <button onClick={() => removeQuote(block.label, qi)}
+                            style={{ background: "none", border: "none", color: "#3a3a3a", cursor: "pointer", fontSize: 14, padding: "0 4px", marginLeft: 8, flexShrink: 0 }}>x</button>
                         </div>
                       ))}
                     </div>
                   )}
 
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <textarea
-                      value={chatInput}
-                      onChange={e => setChatInput(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
-                      placeholder="Type an instruction and press Enter..."
-                      style={{ ...TA, flex: 1, height: 66 }}
-                    />
-                    <Btn gold onClick={handleChat} disabled={chatLoading || !chatInput.trim()} style={{ alignSelf: "flex-end", minWidth: 60 }}>
-                      {chatLoading ? "..." : "SEND"}
-                    </Btn>
-                  </div>
-                  {chatError && <div style={{ marginTop: 7, color: "#ef4444", fontSize: 11, fontFamily: "monospace" }}>Error: {chatError}</div>}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+                  {editingBlock === i
+                    ? <textarea value={block.summary} onChange={e => updateBlock(i, "summary", e.target.value)} rows={4}
+                        style={{ ...TA, fontSize: 13, marginBottom: 10 }} />
+                    : <p style={{ margin: "0 0 10px", fontSize: 13, lineHeight: 1.8, color: "#999" }}>{block.summary}</p>
+                  }
 
-        {activeTab === 1 && (
-          <div>
-            <div style={{ marginBottom: 14 }}>
-              <Lbl>BLOCK LABEL (OPTIONAL)</Lbl>
-              <input value={transcriptBlock} onChange={e => setTranscriptBlock(e.target.value)}
-                placeholder="e.g. A BLOCK - IRAN"
-                style={{ ...TA, height: "auto", padding: "10px 14px", fontSize: 13 }} />
+                  <ul style={{ margin: 0, padding: "0 0 0 16px" }}>
+                    {block.bullets.map((bullet, j) => (
+                      <li key={j} style={{ marginBottom: 7, fontSize: 12, lineHeight: 1.7, color: "#777" }}>
+                        {editingBlock === i
+                          ? <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                              <textarea value={bullet} onChange={e => updateBullet(i, j, e.target.value)} rows={2}
+                                style={{ ...TA, flex: 1, fontSize: 12 }} />
+                              <button onClick={() => removeBullet(i, j)}
+                                style={{ background: "none", border: "none", color: "#3a3a3a", cursor: "pointer", fontSize: 16, padding: "3px 4px" }}>x</button>
+                            </div>
+                          : bullet
+                        }
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </div>
-           <div style={{ marginBottom: 18 }}>
-              <Lbl>TRANSCRIPT JSON</Lbl>
+
+            <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 22 }}>
+              <Lbl>REFINE WITH INSTRUCTIONS</Lbl>
+              <p style={{ margin: "0 0 12px", fontSize: 11, color: "#3a3a3a", fontFamily: "monospace", lineHeight: 1.65 }}>
+                e.g. "make the Iran block shorter" / "cut to hit word count" / "lead every bullet with the news, not the outlet name"
+              </p>
+
+              {chatTurns.length > 0 && (
+                <div style={{ marginBottom: 10, maxHeight: 150, overflowY: "auto", padding: "10px 12px", background: "#0d0d0d", border: "1px solid #161616", borderRadius: 2 }}>
+                  {chatTurns.map((msg, i) => (
+                    <div key={i} style={{ marginBottom: 6 }}>
+                      <span style={{ fontSize: 9, color: "#c8a96e", fontFamily: "monospace", letterSpacing: 1 }}>YOU  </span>
+                      <span style={{ fontSize: 11, color: "#666" }}>{msg.content}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div style={{ display: "flex", gap: 10 }}>
-                <Btn small onClick={() => transcriptFileRef.current.click()}>UPLOAD JSON</Btn>
-                <input ref={transcriptFileRef} type="file" accept=".json"
-                  onChange={e => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = ev => setTranscriptText(ev.target.result); r.readAsText(f); }}
-                  style={{ display: "none" }} />
-                {transcriptText && <span style={{ fontSize: 11, color: "#22c55e", alignSelf: "center", fontFamily: "monospace" }}>FILE LOADED</span>}
+                <textarea
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
+                  placeholder="Type an instruction and press Enter..."
+                  style={{ ...TA, flex: 1, height: 66 }}
+                />
+                <Btn gold onClick={handleChat} disabled={chatLoading || !chatInput.trim()} style={{ alignSelf: "flex-end", minWidth: 60 }}>
+                  {chatLoading ? "..." : "SEND"}
+                </Btn>
               </div>
+              {chatError && <div style={{ marginTop: 7, color: "#ef4444", fontSize: 11, fontFamily: "monospace" }}>Error: {chatError}</div>}
             </div>
-            <Btn gold onClick={handleExtractQuotes} disabled={extracting || !transcriptText.trim()}>
-              {extracting ? "EXTRACTING..." : "EXTRACT QUOTES"}
-            </Btn>
-
-            {transcriptError && <div style={{ marginTop: 12, color: "#ef4444", fontSize: 11, fontFamily: "monospace" }}>Error: {transcriptError}</div>}
-
-            {quotes && (
-              <div style={{ marginTop: 28 }}>
-                <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid #161616" }}>
-                  <span style={{ fontSize: 9, letterSpacing: 3, color: "#444", fontFamily: "monospace" }}>
-                    {quotes.block || "QUOTES"}{quotes.topic ? " - " + quotes.topic : ""}
-                  </span>
-                </div>
-                {quotes.quotes.map((q, i) => (
-                  <div key={i} style={{ background: "#0d0d0d", border: "1px solid #161616", borderRadius: 2, padding: "13px 15px", marginBottom: 9, position: "relative" }}>
-                    <div style={{ fontSize: 9, color: "#444", fontFamily: "monospace", letterSpacing: 1, marginBottom: 6 }}>[{q.timestamp}]</div>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.8, color: "#bbb", fontStyle: "italic" }}>"{q.text}"</p>
-                    <button onClick={() => navigator.clipboard.writeText('"' + q.text + '"')} style={{
-                      position: "absolute", top: 10, right: 10, background: "none", border: "1px solid #1e1e1e",
-                      color: "#3a3a3a", padding: "3px 9px", fontSize: 9, fontFamily: "monospace", letterSpacing: 1, cursor: "pointer", borderRadius: 2,
-                    }}>COPY</button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
       </div>
